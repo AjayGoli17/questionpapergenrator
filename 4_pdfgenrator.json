@@ -1,0 +1,201 @@
+{
+  "name": "PDF_DOWNLOAD",
+  "nodes": [
+    {
+      "id": "3384e6f0-e987-44e0-ae6d-e37d3949c4a4",
+      "name": "PDF Download Request",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        0,
+        300
+      ],
+      "parameters": {
+        "httpMethod": "GET",
+        "path": "question-paper-download",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "webhookId": "68208a89-2571-47d2-8820-265faa7ab2f7"
+    },
+    {
+      "id": "59e003f3-5eeb-4689-a2df-6b3b05e0780c",
+      "name": "Validate Allowed Filename",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        260,
+        300
+      ],
+      "parameters": {
+        "jsCode": "\n// Security: only ever allow reading the exact generated question-paper PDF\n// filenames from a single fixed directory. Never build a path directly from\n// unsanitized user input.\n//\n// - Only filenames matching ALLOWED_FILENAME_PATTERN are accepted.\n// - '..' and any path separators are explicitly rejected (defense in depth,\n//   even though the pattern below already excludes them).\n// - The resolved path is always BASE_DIR + <validated filename>, never a\n//   caller-supplied path.\n//\n// If 03_DOCUMENT_GENERATOR ever changes its output filenames, update\n// ALLOWED_FILENAME_PATTERN to match - do not loosen it to a generic wildcard.\nconst BASE_DIR = '/data/question-papers/';\nconst ALLOWED_FILENAME_PATTERN = /^Question_Paper_Set_[A-Z]\\.pdf$/;\n\nconst query = $input.first().json.query || {};\nconst requested = String(query.file || '').trim();\n\nconst isValid =\n  ALLOWED_FILENAME_PATTERN.test(requested) &&\n  !requested.includes('..') &&\n  !requested.includes('/') &&\n  !requested.includes('\\\\');\n\nreturn [{\n  json: {\n    requestedFile: requested,\n    isValid,\n    filePath: isValid ? (BASE_DIR + requested) : null\n  }\n}];\n"
+      }
+    },
+    {
+      "id": "e221ff0f-4844-4ec7-97d4-1c722bc647a9",
+      "name": "Filename Valid?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        520,
+        300
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose"
+          },
+          "conditions": [
+            {
+              "id": "c1",
+              "leftValue": "={{ $json.isValid }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "1de4f4df-6449-47a2-ae1f-30b39d57c607",
+      "name": "Read PDF File",
+      "type": "n8n-nodes-base.readWriteFile",
+      "typeVersion": 1,
+      "position": [
+        780,
+        220
+      ],
+      "parameters": {
+        "operation": "read",
+        "fileSelector": "={{ $json.filePath }}",
+        "options": {}
+      }
+    },
+    {
+      "id": "f129038c-c667-43a1-80be-93a0bf38f6ca",
+      "name": "Respond PDF File",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        1040,
+        220
+      ],
+      "parameters": {
+        "respondWith": "binary",
+        "responseDataSource": "automatically",
+        "options": {
+          "responseHeaders": {
+            "entries": [
+              {
+                "name": "Content-Type",
+                "value": "application/pdf"
+              },
+              {
+                "name": "Content-Disposition",
+                "value": "=attachment; filename=\"{{ $('Validate Allowed Filename').item.json.requestedFile }}\""
+              }
+            ]
+          },
+          "responseCode": 200
+        }
+      }
+    },
+    {
+      "id": "5a83b6d6-437a-44b7-a4e9-d6179b0a25b2",
+      "name": "Respond Invalid Filename",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        780,
+        420
+      ],
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { success: false, error: { code: 'INVALID_FILENAME', message: 'The requested file is not a valid question-paper PDF.' } } }}",
+        "options": {
+          "responseCode": 400
+        }
+      }
+    },
+    {
+      "id": "b4953e9a-8ed6-490f-8735-28661363a38d",
+      "name": "Note_pdf_download",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        0,
+        -180
+      ],
+      "parameters": {
+        "content": "PDF_DOWNLOAD\n\nStandalone helper workflow that turns a generated question-paper filename into an actual PDF download. Called from the links on 01_EXAM_CONTROLLER's Form Ending completion page, of the form:\nhttps://<N8N_PUBLIC_URL>/webhook/question-paper-download?file=Question_Paper_Set_A.pdf\n\nSECURITY: 'Validate Allowed Filename' only accepts filenames matching Question_Paper_Set_<Letter>.pdf and rejects anything containing '..' or a path separator. The file path is always BASE_DIR + <validated filename> - the raw query parameter is never used to build a path directly. Update ALLOWED_FILENAME_PATTERN and BASE_DIR inside that node if 03_DOCUMENT_GENERATOR's output location/naming changes.\n\nSETUP: no authentication is configured (demo/internal use). Activate this workflow so its production webhook URL is live, and make sure BASE_DIR matches the directory 03_DOCUMENT_GENERATOR actually writes PDFs to on this instance.",
+        "height": 300,
+        "width": 480,
+        "color": 5
+      }
+    }
+  ],
+  "connections": {
+    "PDF Download Request": {
+      "main": [
+        [
+          {
+            "node": "Validate Allowed Filename",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validate Allowed Filename": {
+      "main": [
+        [
+          {
+            "node": "Filename Valid?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Filename Valid?": {
+      "main": [
+        [
+          {
+            "node": "Read PDF File",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Respond Invalid Filename",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Read PDF File": {
+      "main": [
+        [
+          {
+            "node": "Respond PDF File",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "pinData": {},
+  "settings": {
+    "executionOrder": "v1"
+  }
+}

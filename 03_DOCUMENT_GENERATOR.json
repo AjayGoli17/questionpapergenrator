@@ -1,0 +1,455 @@
+{
+  "name": "03_DOCUMENT_GENERATOR",
+  "nodes": [
+    {
+      "id": "da190d88-f010-42b4-8907-6f2af54a1805",
+      "name": "Input",
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1.1,
+      "position": [
+        0,
+        300
+      ],
+      "parameters": {
+        "workflowInputs": {
+          "values": [
+            {
+              "name": "questionPaperData"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "2cc7e585-3650-472e-9fb6-c61cfd3a7f5c",
+      "name": "Validate Input",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        0,
+        300
+      ],
+      "parameters": {
+        "jsCode": "\nconst data = $input.first().json.questionPaperData;\n\nconst errors = [];\nif (!data) errors.push('No question-paper data received');\nif (data && data.success !== true) errors.push('Upstream question-paper data was not marked successful');\nif (data && !Array.isArray(data.sets)) errors.push('Question-paper data is missing \"sets\" array');\nif (data && Array.isArray(data.sets) && data.sets.length === 0) errors.push('Question-paper data has zero sets');\n\nreturn [{\n  json: {\n    data,\n    validation: { valid: errors.length === 0, errors }\n  }\n}];\n"
+      }
+    },
+    {
+      "id": "1c7b8e0e-67b1-4230-903a-4b7590d48bc9",
+      "name": "Input Valid?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        260,
+        300
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose"
+          },
+          "conditions": [
+            {
+              "id": "c1",
+              "leftValue": "={{ $json.validation.valid }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "ccac3a31-2545-4906-9ca3-739770cebfce",
+      "name": "Prepare For Split",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        520,
+        300
+      ],
+      "parameters": {
+        "jsCode": "\nconst data = $input.first().json.data;\n\nreturn [{\n  json: {\n    exam: data.exam,\n    sets: data.sets\n  }\n}];\n"
+      }
+    },
+    {
+      "id": "71882214-8bf5-411d-a023-5a0407b215c5",
+      "name": "Split Sets",
+      "type": "n8n-nodes-base.splitOut",
+      "typeVersion": 1,
+      "position": [
+        780,
+        300
+      ],
+      "parameters": {
+        "fieldToSplitOut": "sets",
+        "options": {
+          "include": "allOtherFields"
+        }
+      }
+    },
+    {
+      "id": "fdc1603b-24dd-4d7a-b249-4ed4015d9cdd",
+      "name": "Build HTML From Template",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1040,
+        300
+      ],
+      "parameters": {
+        "jsCode": "\n// -----------------------------------------------------------------\n// TEMPLATE NOTE\n// -----------------------------------------------------------------\n// No template image was attached to this build task, so this node\n// implements the question-paper layout described in the spec (header,\n// institution info, exam info, date area, instructions, Part-B question\n// table with Q.No / Questions / Marks / RBL / Course Outcomes columns).\n// If/when the real template image is available, only THIS node needs to\n// change - it is fully isolated from question generation logic.\n// -----------------------------------------------------------------\n// This node runs in \"Run Once for Each Item\" mode: Split Sets emits one\n// item per question-paper set (Set A, Set B, ...), and each must be\n// turned into its own HTML document independently.\n\nconst item = $input.item.json;\nconst exam = item.exam;\nconst set = item.sets;\n\nfunction esc(s) {\n  return String(s == null ? '' : s)\n    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');\n}\n\nconst rows = set.questions.map(q => `\n  <tr>\n    <td class=\"qno\">${esc(q.questionNumber)}</td>\n    <td class=\"qtext\">${esc(q.question)}</td>\n    <td class=\"marks\">${esc(q.marks)}</td>\n    <td class=\"rbl\">${esc(q.rbl)}</td>\n    <td class=\"co\">${Array.isArray(q.courseOutcomes) ? esc(q.courseOutcomes.join(', ')) : esc(q.courseOutcomes)}</td>\n  </tr>`).join('\\n');\n\nconst html = `<!DOCTYPE html>\n<html>\n<head>\n<meta charset=\"utf-8\" />\n<style>\n  @page { size: A4; margin: 18mm 14mm; }\n  body { font-family: 'Times New Roman', serif; color: #111; font-size: 12pt; }\n  .header { text-align: center; border-bottom: 2px solid #111; padding-bottom: 8px; margin-bottom: 10px; }\n  .institution { font-size: 16pt; font-weight: bold; letter-spacing: 0.5px; }\n  .exam-title { font-size: 13pt; margin-top: 4px; }\n  .info-table { width: 100%; border-collapse: collapse; margin-bottom: 10px; font-size: 11pt; }\n  .info-table td { padding: 3px 4px; }\n  .instructions { font-size: 10.5pt; font-style: italic; margin-bottom: 10px; border-top: 1px solid #999; border-bottom: 1px solid #999; padding: 6px 0; }\n  .part-title { font-weight: bold; text-align: center; margin: 14px 0 6px; text-decoration: underline; }\n  table.questions { width: 100%; border-collapse: collapse; }\n  table.questions th, table.questions td { border: 1px solid #111; padding: 6px 8px; vertical-align: top; }\n  table.questions th { background: #f0f0f0; font-size: 10.5pt; }\n  .qno { width: 6%; text-align: center; }\n  .qtext { width: 58%; }\n  .marks { width: 10%; text-align: center; }\n  .rbl { width: 13%; text-align: center; }\n  .co { width: 13%; text-align: center; }\n  .set-badge { position: absolute; top: 10mm; right: 14mm; font-weight: bold; border: 1px solid #111; padding: 2px 8px; }\n</style>\n</head>\n<body>\n  <div class=\"set-badge\">${esc(set.setName)}</div>\n  <div class=\"header\">\n    <div class=\"institution\">SCHOOL NAME / INSTITUTION</div>\n    <div class=\"exam-title\">${esc(exam.examType)} EXAMINATION - ${esc(exam.academicYear)}</div>\n  </div>\n\n  <table class=\"info-table\">\n    <tr>\n      <td><b>Class:</b> ${esc(exam.class)}</td>\n      <td><b>Section:</b> ${esc(exam.section)}</td>\n      <td><b>Subject:</b> ${esc(exam.subject)}</td>\n    </tr>\n    <tr>\n      <td><b>Time:</b> ${esc(exam.time)}</td>\n      <td><b>Maximum Marks:</b> ${esc(exam.maximumMarks)}</td>\n      <td><b>Date:</b> ___________________</td>\n    </tr>\n  </table>\n\n  <div class=\"instructions\">\n    Instructions: Answer any <b>${esc(exam.questionsToAnswer)}</b> out of\n    <b>${esc(exam.totalQuestions)}</b> questions. Each question carries\n    <b>${esc(exam.marksPerQuestion)}</b> marks. Write answers legibly.\n  </div>\n\n  <div class=\"part-title\">PART - B</div>\n\n  <table class=\"questions\">\n    <thead>\n      <tr>\n        <th>Q.No</th>\n        <th>Questions</th>\n        <th>Marks</th>\n        <th>RBL</th>\n        <th>Course Outcomes</th>\n      </tr>\n    </thead>\n    <tbody>\n      ${rows}\n    </tbody>\n  </table>\n</body>\n</html>`;\n\nreturn {\n  json: {\n    exam,\n    setName: set.setName,\n    fileName: `Question_Paper_${set.setName.replace(/\\s+/g, '_')}.pdf`,\n    html\n  }\n};\n",
+        "mode": "runOnceForEachItem"
+      }
+    },
+    {
+      "id": "f3a1c9e2-6b7d-4a1e-9c3f-2d8e5b4a7c11",
+      "name": "Prepare HTML File",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1300,
+        300
+      ],
+      "parameters": {
+        "jsCode": "\n// Gotenberg's HTML route requires the HTML to arrive as an actual\n// multipart file named 'index.html' (not JSON), so we convert the\n// HTML string produced by 'Build HTML From Template' into a binary\n// property here. No HTML content is changed.\nconst item = $input.item.json;\nconst htmlBuffer = Buffer.from(item.html, 'utf-8');\n\nreturn {\n  json: item,\n  binary: {\n    file: {\n      data: htmlBuffer.toString('base64'),\n      mimeType: 'text/html',\n      fileName: 'index.html'\n    }\n  }\n};\n",
+        "mode": "runOnceForEachItem"
+      }
+    },
+    {
+      "id": "4cde54a7-ed63-4662-baaf-93b47354d021",
+      "name": "HTML to PDF — Gotenberg",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1560,
+        300
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "={{ ($env.GOTENBERG_URL || 'http://gotenberg:3000') + '/forms/chromium/convert/html' }}",
+        "authentication": "none",
+        "sendBody": true,
+        "contentType": "multipart-form-data",
+        "bodyParameters": {
+          "parameters": [
+            {
+              "parameterType": "formBinaryData",
+              "name": "files",
+              "inputDataFieldName": "file"
+            },
+            {
+              "parameterType": "formData",
+              "name": "preferCssPageSize",
+              "value": "true"
+            }
+          ]
+        },
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Gotenberg-Output-Filename",
+              "value": "={{ $json.fileName ? $json.fileName.replace(/\\.pdf$/i, '') : 'question-paper' }}"
+            }
+          ]
+        },
+        "options": {
+          "response": {
+            "response": {
+              "responseFormat": "file",
+              "outputPropertyName": "data"
+            }
+          },
+          "timeout": 30000
+        }
+      },
+      "notes": "Sends the generated HTML to a local Gotenberg instance (Chromium HTML->PDF route) as a multipart/form-data file named index.html, per Gotenberg's API contract. GOTENBERG_URL env var overrides the default Docker service hostname 'http://gotenberg:3000'. 'preferCssPageSize=true' makes Gotenberg honor the existing @page CSS (A4) in the HTML. Retries twice on transient failure before erroring out; 'Verify PDF Generated' catches any case where Gotenberg responds without a real PDF.",
+      "retryOnFail": true,
+      "maxTries": 2,
+      "waitBetweenTries": 1000
+    },
+    {
+      "id": "a7d4e8f1-3c9b-4e6a-8f2d-1b5c9a3e7d44",
+      "name": "Verify PDF Generated",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1820,
+        300
+      ],
+      "parameters": {
+        "jsCode": "\n// Guards against Workflow 03 reporting success when Gotenberg did not\n// actually return a PDF (e.g. Gotenberg unreachable, wrong Docker\n// hostname, or an error page instead of binary PDF data). Throwing\n// here stops the workflow with a clear error instead of silently\n// continuing to 'Save PDF' with bad/empty data.\nconst item = $input.item;\nconst fileName = (item.json && item.json.fileName) || 'question paper';\nconst binary = item.binary;\n\nif (!binary || !binary.data) {\n  throw new Error(\n    `PDF generation failed for ${fileName}: Gotenberg did not return a PDF. ` +\n    `Check that the Gotenberg container is running and reachable at ` +\n    `${$env.GOTENBERG_URL || 'http://gotenberg:3000'} from the n8n container ` +\n    `(same Docker network, correct service name).`\n  );\n}\n\nif (binary.data.mimeType && binary.data.mimeType.indexOf('pdf') === -1) {\n  throw new Error(\n    `PDF generation failed for ${fileName}: Gotenberg returned content-type ` +\n    `\"${binary.data.mimeType}\" instead of a PDF. This usually means Gotenberg ` +\n    `returned an error page rather than a rendered document.`\n  );\n}\n\nreturn item;\n",
+        "mode": "runOnceForEachItem"
+      }
+    },
+    {
+      "id": "ca197373-ecb6-4232-adf2-db90c1a54db5",
+      "name": "Save PDF",
+      "type": "n8n-nodes-base.readWriteFile",
+      "typeVersion": 1,
+      "position": [
+        2080,
+        300
+      ],
+      "parameters": {
+        "operation": "write",
+        "fileName": "={{ '/data/question-papers/' + $('Build HTML From Template').item.json.fileName }}",
+        "dataPropertyName": "data",
+        "options": {}
+      },
+      "notes": "Writes to local n8n file storage by default, reading the binary PDF from the 'data' property produced by 'HTML to PDF'. Swap for Google Drive / S3 / any storage node if the school needs the PDFs hosted elsewhere - only this node needs to change."
+    },
+    {
+      "id": "879a78bd-1dc4-476c-a113-752c51f9b089",
+      "name": "Collect Document Info",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2340,
+        300
+      ],
+      "parameters": {
+        "jsCode": "\n// This node runs in \"Run Once for Each Item\" mode, mirroring the one\n// item per set that has flowed through the whole HTML -> PDF -> Save\n// chain since \"Split Sets\". We read the set's name/fileName back from\n// \"Build HTML From Template\" via the paired-item reference rather than\n// depending on the exact output shape of the file-write node.\nconst htmlItem = $('Build HTML From Template').item.json;\n\nreturn {\n  json: {\n    setName: htmlItem.setName,\n    fileName: htmlItem.fileName,\n    fileUrl: `/data/question-papers/${htmlItem.fileName}`\n  }\n};\n",
+        "mode": "runOnceForEachItem"
+      }
+    },
+    {
+      "id": "db1bbe27-0f9e-4ca9-9d25-2a100a6c86d5",
+      "name": "Aggregate Documents",
+      "type": "n8n-nodes-base.aggregate",
+      "typeVersion": 1,
+      "position": [
+        2600,
+        300
+      ],
+      "parameters": {
+        "aggregate": "aggregateAllItemData",
+        "options": {}
+      }
+    },
+    {
+      "id": "b089fc89-32a2-4cd2-89db-1f667a056a53",
+      "name": "Format Final Output",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2860,
+        300
+      ],
+      "parameters": {
+        "jsCode": "\nconst aggregated = $input.first().json;\n// n8n's \"Aggregate All Item Data\" produces { data: [ {json...}, ... ] } by default\nconst documents = (aggregated.data || []).map(d => d.json ? d.json : d);\n\nconst exam = $('Validate Input').first().json.data.exam;\n\nreturn [{\n  json: {\n    success: true,\n    exam,\n    documents\n  }\n}];\n"
+      }
+    },
+    {
+      "id": "1b22c927-ad3b-4811-9d44-b392bdefaac6",
+      "name": "Return Structured JSON",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3120,
+        300
+      ],
+      "parameters": {
+        "jsCode": "return [{ json: $input.first().json }];"
+      }
+    },
+    {
+      "id": "1a32cdb9-34b7-49bf-8d00-b4160a58a09c",
+      "name": "Format Error Response",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1160,
+        720
+      ],
+      "parameters": {
+        "jsCode": "\nconst j = $input.first().json;\nreturn [{\n  json: {\n    success: false,\n    error: {\n      code: 'INVALID_DOCUMENT_INPUT',\n      message: (j.validation && j.validation.errors.join('; ')) || 'Unknown document-generation error'\n    }\n  }\n}];\n"
+      }
+    },
+    {
+      "id": "ed61fe17-d00c-4c04-894e-edb4f931638e",
+      "name": "Note_aa3d9de5",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        0,
+        -260
+      ],
+      "parameters": {
+        "content": "03_DOCUMENT_GENERATOR\n\nReceives validated question-paper JSON from 01_EXAM_CONTROLLER (via Workflow 2's output) and turns each set into a PDF using the question-paper template. Generates 1 PDF for 1 set, 2 PDFs for 2 sets. Does not touch question content.\n\nPDF RENDERING: 'Build HTML From Template' -> 'Prepare HTML File' (wraps the HTML string as a binary index.html file) -> 'HTML to PDF — Gotenberg' (POSTs multipart/form-data to Gotenberg's Chromium HTML route) -> 'Verify PDF Generated' (fails the workflow clearly if Gotenberg didn't return a real PDF) -> 'Save PDF'.\n\nSETUP: set the GOTENBERG_URL environment variable on the n8n container (defaults to http://gotenberg:3000, the typical Docker Compose service hostname). Run a 'gotenberg/gotenberg' container on the same Docker network as n8n. No credential is needed for local Gotenberg.\n\nTEMPLATE: no template image was attached to this task - 'Build HTML From Template' implements the layout described in the text spec (header/institution/exam info/instructions/Part-B table with Q.No, Questions, Marks, RBL, Course Outcomes). Replace that node's HTML/CSS with the real design once the image is available.",
+        "height": 340,
+        "width": 560,
+        "color": 5
+      },
+      "height": 400
+    }
+  ],
+  "connections": {
+    "Input": {
+      "main": [
+        [
+          {
+            "node": "Validate Input",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validate Input": {
+      "main": [
+        [
+          {
+            "node": "Input Valid?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Input Valid?": {
+      "main": [
+        [
+          {
+            "node": "Prepare For Split",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Format Error Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare For Split": {
+      "main": [
+        [
+          {
+            "node": "Split Sets",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Split Sets": {
+      "main": [
+        [
+          {
+            "node": "Build HTML From Template",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build HTML From Template": {
+      "main": [
+        [
+          {
+            "node": "Prepare HTML File",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Save PDF": {
+      "main": [
+        [
+          {
+            "node": "Collect Document Info",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Collect Document Info": {
+      "main": [
+        [
+          {
+            "node": "Aggregate Documents",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Aggregate Documents": {
+      "main": [
+        [
+          {
+            "node": "Format Final Output",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Format Final Output": {
+      "main": [
+        [
+          {
+            "node": "Return Structured JSON",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare HTML File": {
+      "main": [
+        [
+          {
+            "node": "HTML to PDF — Gotenberg",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HTML to PDF — Gotenberg": {
+      "main": [
+        [
+          {
+            "node": "Verify PDF Generated",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Verify PDF Generated": {
+      "main": [
+        [
+          {
+            "node": "Save PDF",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "pinData": {},
+  "versionId": "ba251296-b2a4-4ec2-8bcc-df541a4660af",
+  "meta": {
+    "instanceId": "ea2958bc-5f19-4d84-8fa1-9f4e44af83c8"
+  }
+}

@@ -1,0 +1,581 @@
+{
+  "name": "02_AI_QUESTION_PAPER_ENGINE",
+  "nodes": [
+    {
+      "id": "7a445152-9881-4efa-9512-eb2157b77551",
+      "name": "Input",
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1.1,
+      "position": [
+        0,
+        300
+      ],
+      "parameters": {
+        "workflowInputs": {
+          "values": [
+            {
+              "name": "examConfig"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "5e9433ba-e21f-4f24-8243-f3e3620909f4",
+      "name": "Create Exam Blueprint",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        0,
+        300
+      ],
+      "parameters": {
+        "jsCode": "\n// Builds the exam blueprint: how questions map onto curriculum chapters,\n// how marks are distributed, RBL levels used, and CO mapping.\n// This MUST run before any question text is generated.\n\nconst examConfig = $input.first().json.examConfig;\nconst chapters = examConfig.curriculum.chapters;\n\nconst totalQuestions = examConfig.totalQuestions;\nconst marksPerQuestion = examConfig.marksPerQuestion;\n\n// Distribute questions as evenly as possible across chapters, then across\n// topics within each chapter (round-robin), so coverage is comparable\n// across Set A / Set B.\nconst allTopics = [];\nchapters.forEach(ch => {\n  ch.topics.forEach(topic => {\n    allTopics.push({ chapter: ch.chapter, topic });\n  });\n});\n\nconst distribution = [];\nfor (let i = 0; i < totalQuestions; i++) {\n  const t = allTopics[i % allTopics.length];\n  distribution.push({\n    questionNumber: i + 1,\n    chapter: t.chapter,\n    topic: t.topic,\n    marks: marksPerQuestion\n  });\n}\n\n// Simple RBL (Revised Bloom's Level) spread: cycle through levels so the\n// paper isn't all one difficulty tier.\nconst RBL_LEVELS = ['Remember', 'Understand', 'Apply', 'Analyze'];\ndistribution.forEach((d, idx) => {\n  d.rbl = RBL_LEVELS[idx % RBL_LEVELS.length];\n  // Course Outcome mapping - one CO per chapter, in order of first\n  // appearance, so the same chapter always maps to the same CO.\n});\n\nconst chapterOrder = [...new Set(distribution.map(d => d.chapter))];\nconst coMap = {};\nchapterOrder.forEach((ch, idx) => { coMap[ch] = `CO${idx + 1}`; });\ndistribution.forEach(d => { d.courseOutcomes = [coMap[d.chapter]]; });\n\nconst blueprint = {\n  totalQuestions,\n  questionsToAnswer: examConfig.questionsToAnswer,\n  marksPerQuestion,\n  maximumMarks: examConfig.maximumMarks,\n  chapterCoverage: chapterOrder,\n  courseOutcomeMap: coMap,\n  distribution\n};\n\nreturn [{ json: { examConfig, blueprint } }];\n"
+      }
+    },
+    {
+      "id": "35759b32-9a94-4028-bfe5-e26b7dd25b18",
+      "name": "Build Prompt - Set A",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        260,
+        300
+      ],
+      "parameters": {
+        "jsCode": "\nconst examConfig = $input.first().json.examConfig;\nconst blueprint = $input.first().json.blueprint;\n\nconst distributionText = blueprint.distribution.map(d =>\n  `Q${d.questionNumber}: Chapter \"${d.chapter}\" / Topic \"${d.topic}\", ` +\n  `Marks: ${d.marks}, RBL: ${d.rbl}, CO: ${d.courseOutcomes.join(', ')}`\n).join('\\n');\n\nconst prompt = `You are generating exam questions for a school exam.\n\nClass: ${examConfig.class}\nSubject: ${examConfig.subject}\nExam Type: ${examConfig.examType}\nAcademic level: appropriate for Class ${examConfig.class} students.\n\nGenerate SET A of the question paper strictly following this blueprint\n(one question per line item below, in the same order):\n\n${distributionText}\n\nRules:\n- Each question must match its assigned chapter and topic.\n- Each question must be clear, answerable, and academically meaningful.\n- Do NOT include answers, solutions, or answer-key information anywhere.\n- Do NOT introduce topics outside the assigned chapter/topic.\n- Do NOT duplicate any question within this set.\n\nReturn ONLY a JSON array (no prose, no markdown fences) where each item has\nexactly this shape:\n{\n  \"questionNumber\": number,\n  \"question\": \"string\",\n  \"marks\": number,\n  \"rbl\": \"string\",\n  \"courseOutcomes\": [\"string\"],\n  \"chapter\": \"string\",\n  \"topic\": \"string\"\n}`;\n\nreturn [{ json: { examConfig, blueprint, prompt, setName: 'Set A' } }];\n"
+      }
+    },
+    {
+      "id": "8e70fc1d-77d2-454a-950d-a5d88d5faf92",
+      "name": "AI Generate - Set A",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        520,
+        300
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash:generateContent",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "content-type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ contents: [ { role: 'user', parts: [ { text: $json.prompt } ] } ], generationConfig: { temperature: 0.7, maxOutputTokens: 4000, responseMimeType: 'application/json' } }) }}",
+        "options": {}
+      },
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "PLACEHOLDER_CREDENTIAL_ID",
+          "name": "Gemini API Key"
+        }
+      },
+      "notes": "Configure an httpHeaderAuth credential named 'Gemini API Key' with header name 'x-goog-api-key' and your Gemini API key as the value (or point it at an environment variable). No API key is hardcoded here. Model: gemini-3.5-flash."
+    },
+    {
+      "id": "d947c520-5356-4384-ba82-0f7bc5b6dc31",
+      "name": "Parse & Validate - Set A",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        780,
+        300
+      ],
+      "parameters": {
+        "jsCode": "\nconst prior = $('Build Prompt - Set A').first().json;\nconst aiResponse = $input.first().json;\n\nfunction extractText(resp) {\n  // Gemini generateContent response format\n  if (resp && Array.isArray(resp.candidates) && resp.candidates.length > 0) {\n    const candidate = resp.candidates[0];\n    const parts = candidate && candidate.content && candidate.content.parts;\n    if (Array.isArray(parts)) {\n      const textPart = parts.find(p => typeof p.text === 'string');\n      if (textPart) return textPart.text;\n    }\n  }\n  // Legacy content-array response format (kept for backward compatibility)\n  if (resp && Array.isArray(resp.content)) {\n    const textBlock = resp.content.find(b => b.type === 'text');\n    if (textBlock) return textBlock.text;\n  }\n  if (typeof resp === 'string') return resp;\n  return JSON.stringify(resp);\n}\n\nfunction safeParseArray(text) {\n  const cleaned = text.replace(/```json|```/g, '').trim();\n  try {\n    const parsed = JSON.parse(cleaned);\n    return Array.isArray(parsed) ? parsed : null;\n  } catch (e) {\n    return null;\n  }\n}\n\nconst raw = extractText(aiResponse);\nconst questions = safeParseArray(raw) || [];\n\nconst blueprint = prior.blueprint;\nconst errors = [];\n\nif (questions.length !== blueprint.totalQuestions) {\n  errors.push(`Set A returned ${questions.length} questions, expected ${blueprint.totalQuestions}`);\n}\n\nquestions.forEach((q, i) => {\n  if (!q.question || typeof q.question !== 'string' || q.question.trim().length < 5) {\n    errors.push(`Set A question ${i + 1} is missing or too short`);\n  }\n  if (q.marks !== blueprint.marksPerQuestion) {\n    errors.push(`Set A question ${i + 1} has incorrect marks`);\n  }\n  const answerLeakPattern = /\\banswer\\s*:|\\bsolution\\s*:/i;\n  if (q.question && answerLeakPattern.test(q.question)) {\n    errors.push(`Set A question ${i + 1} appears to contain answer/solution text`);\n  }\n});\n\nconst marksSum = questions.reduce((s, q) => s + (Number(q.marks) || 0), 0);\nif (marksSum !== blueprint.maximumMarks) {\n  errors.push(`Set A total marks (${marksSum}) does not equal Maximum Marks (${blueprint.maximumMarks})`);\n}\n\nreturn [{\n  json: {\n    examConfig: prior.examConfig,\n    blueprint,\n    set: { setName: 'Set A', questions },\n    setAValidation: { valid: errors.length === 0, errors }\n  }\n}];\n"
+      }
+    },
+    {
+      "id": "f1d67558-fa58-4935-83c2-70767099a1a0",
+      "name": "Two Sets Requested?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        1040,
+        300
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose"
+          },
+          "conditions": [
+            {
+              "id": "c1",
+              "leftValue": "={{ $json.examConfig.numberOfSets }}",
+              "rightValue": 2,
+              "operator": {
+                "type": "number",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "d64536fe-d551-4a70-b3fc-8684be4fd764",
+      "name": "Build Prompt - Set B",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1300,
+        80
+      ],
+      "parameters": {
+        "jsCode": "\nconst examConfig = $input.first().json.examConfig;\nconst blueprint = $input.first().json.blueprint;\nconst setA = $input.first().json.set;\n\nconst distributionText = blueprint.distribution.map(d =>\n  `Q${d.questionNumber}: Chapter \"${d.chapter}\" / Topic \"${d.topic}\", ` +\n  `Marks: ${d.marks}, RBL: ${d.rbl}, CO: ${d.courseOutcomes.join(', ')}`\n).join('\\n');\n\nconst setAQuestionsText = setA.questions.map(q => `- ${q.question}`).join('\\n');\n\nconst prompt = `You are generating SET B of the same exam paper. Set B must\nfollow the SAME blueprint (same chapters, topics, marks, RBL, CO per\nquestion number) as Set A below, but every question must be GENUINELY\nDIFFERENT from its Set A counterpart.\n\nBlueprint (same structure Set A used):\n${distributionText}\n\nSet A questions, for reference ONLY - do not reuse or lightly reword these,\ndo not just change numbers or names, ask about a different angle or\nsub-concept within the same topic instead:\n${setAQuestionsText}\n\nRules:\n- Do NOT copy any Set A question.\n- Do NOT produce a question that only changes numeric values or names from\n  a Set A question.\n- Do NOT produce a superficial reword of a Set A question.\n- Each Set B question must still match its assigned chapter/topic, be\n  clear, answerable, and academically meaningful, and contain no\n  answers/solutions.\n- Set B must have the same number of questions, same marks, same\n  structure, and comparable curriculum coverage and difficulty as Set A.\n\nReturn ONLY a JSON array (no prose, no markdown fences) where each item has\nexactly this shape:\n{\n  \"questionNumber\": number,\n  \"question\": \"string\",\n  \"marks\": number,\n  \"rbl\": \"string\",\n  \"courseOutcomes\": [\"string\"],\n  \"chapter\": \"string\",\n  \"topic\": \"string\"\n}`;\n\nreturn [{ json: { examConfig, blueprint, setA, prompt, setName: 'Set B' } }];\n"
+      }
+    },
+    {
+      "id": "6a8dcdec-27c6-4afc-bf75-04451ab11a89",
+      "name": "AI Generate - Set B",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1560,
+        80
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash:generateContent",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "content-type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "options": {},
+        "jsonBody": "={{ JSON.stringify({ contents: [ { role: 'user', parts: [ { text: $json.prompt } ] } ], generationConfig: { temperature: 0.7, maxOutputTokens: 4000, responseMimeType: 'application/json' } }) }}"
+      },
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "PLACEHOLDER_CREDENTIAL_ID",
+          "name": "Gemini API Key"
+        }
+      },
+      "notes": "Configure an httpHeaderAuth credential named 'Gemini API Key' with header name 'x-goog-api-key' and your Gemini API key as the value (or point it at an environment variable). No API key is hardcoded here. Model: gemini-3.5-flash."
+    },
+    {
+      "id": "a2e9d417-e36c-4881-aedf-8f760a65ade2",
+      "name": "Parse & Validate - Set B",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1820,
+        80
+      ],
+      "parameters": {
+        "jsCode": "\nconst prior = $('Build Prompt - Set B').first().json;\nconst aiResponse = $input.first().json;\n\nfunction extractText(resp) {\n  // Gemini generateContent response format\n  if (resp && Array.isArray(resp.candidates) && resp.candidates.length > 0) {\n    const candidate = resp.candidates[0];\n    const parts = candidate && candidate.content && candidate.content.parts;\n    if (Array.isArray(parts)) {\n      const textPart = parts.find(p => typeof p.text === 'string');\n      if (textPart) return textPart.text;\n    }\n  }\n  // Legacy content-array response format (kept for backward compatibility)\n  if (resp && Array.isArray(resp.content)) {\n    const textBlock = resp.content.find(b => b.type === 'text');\n    if (textBlock) return textBlock.text;\n  }\n  if (typeof resp === 'string') return resp;\n  return JSON.stringify(resp);\n}\n\nfunction safeParseArray(text) {\n  const cleaned = text.replace(/```json|```/g, '').trim();\n  try {\n    const parsed = JSON.parse(cleaned);\n    return Array.isArray(parsed) ? parsed : null;\n  } catch (e) {\n    return null;\n  }\n}\n\nconst raw = extractText(aiResponse);\nconst questions = safeParseArray(raw) || [];\n\nconst blueprint = prior.blueprint;\nconst errors = [];\n\nif (questions.length !== blueprint.totalQuestions) {\n  errors.push(`Set B returned ${questions.length} questions, expected ${blueprint.totalQuestions}`);\n}\n\nquestions.forEach((q, i) => {\n  if (!q.question || typeof q.question !== 'string' || q.question.trim().length < 5) {\n    errors.push(`Set B question ${i + 1} is missing or too short`);\n  }\n  if (q.marks !== blueprint.marksPerQuestion) {\n    errors.push(`Set B question ${i + 1} has incorrect marks`);\n  }\n  const answerLeakPattern = /\\banswer\\s*:|\\bsolution\\s*:/i;\n  if (q.question && answerLeakPattern.test(q.question)) {\n    errors.push(`Set B question ${i + 1} appears to contain answer/solution text`);\n  }\n});\n\nconst marksSum = questions.reduce((s, q) => s + (Number(q.marks) || 0), 0);\nif (marksSum !== blueprint.maximumMarks) {\n  errors.push(`Set B total marks (${marksSum}) does not equal Maximum Marks (${blueprint.maximumMarks})`);\n}\n\nreturn [{\n  json: {\n    examConfig: prior.examConfig,\n    blueprint,\n    sets: [prior.setA, { setName: 'Set B', questions }],\n    setBValidation: { valid: errors.length === 0, errors }\n  }\n}];\n"
+      }
+    },
+    {
+      "id": "03c2ddbc-7052-4ba7-9ce3-2bc03e871f85",
+      "name": "Wrap Single Set",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2080,
+        520
+      ],
+      "parameters": {
+        "jsCode": "\nconst examConfig = $input.first().json.examConfig;\nconst blueprint = $input.first().json.blueprint;\nconst set = $input.first().json.set;\n\nreturn [{\n  json: {\n    examConfig,\n    blueprint,\n    sets: [set],\n    setBValidation: { valid: true, errors: [] } // no Set B was requested\n  }\n}];\n"
+      }
+    },
+    {
+      "id": "b509a78b-b252-409e-ae02-f707d85f2053",
+      "name": "Compare Sets",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2340,
+        300
+      ],
+      "parameters": {
+        "jsCode": "\nconst examConfig = $input.first().json.examConfig;\nconst blueprint = $input.first().json.blueprint;\nconst sets = $input.first().json.sets;\nconst setBValidation = $input.first().json.setBValidation;\n\n// Token-overlap (Jaccard) similarity - simple, dependency-free way to\n// flag near-duplicate / superficially reworded questions.\nfunction tokenize(text) {\n  return new Set(\n    String(text || '')\n      .toLowerCase()\n      .replace(/[^a-z0-9\\s]/g, ' ')\n      .split(/\\s+/)\n      .filter(t => t.length > 2)\n  );\n}\nfunction jaccard(a, b) {\n  const A = tokenize(a), B = tokenize(b);\n  if (A.size === 0 && B.size === 0) return 0;\n  const intersection = [...A].filter(t => B.has(t)).length;\n  const union = new Set([...A, ...B]).size;\n  return union === 0 ? 0 : intersection / union;\n}\n\nconst SIMILARITY_THRESHOLD = 0.6; // above this = \"too similar\"\nconst flags = []; // { setIndex, questionIndex, reason }\n\nif (sets.length === 2) {\n  const [setA, setB] = sets;\n  setA.questions.forEach((qa, i) => {\n    const qb = setB.questions[i];\n    if (!qb) return;\n    const sim = jaccard(qa.question, qb.question);\n    if (sim >= SIMILARITY_THRESHOLD) {\n      flags.push({\n        setIndex: 1, // flag the Set B question for regeneration\n        questionIndex: i,\n        reason: `Set B Q${i + 1} is too similar to Set A Q${i + 1} (similarity ${sim.toFixed(2)})`\n      });\n    }\n  });\n\n  // exact duplicate check within each set too\n  [setA, setB].forEach((set, setIdx) => {\n    for (let i = 0; i < set.questions.length; i++) {\n      for (let j = i + 1; j < set.questions.length; j++) {\n        const sim = jaccard(set.questions[i].question, set.questions[j].question);\n        if (sim >= SIMILARITY_THRESHOLD) {\n          flags.push({\n            setIndex: setIdx,\n            questionIndex: j,\n            reason: `${set.setName} Q${j + 1} is too similar to ${set.setName} Q${i + 1} within the same set`\n          });\n        }\n      }\n    }\n  });\n}\n\nreturn [{\n  json: {\n    examConfig,\n    blueprint,\n    sets,\n    setBValidation,\n    duplicateFlags: flags\n  }\n}];\n"
+      }
+    },
+    {
+      "id": "d7ed23a0-1d06-44c9-b098-b756f4fb1b3e",
+      "name": "Any Duplicates Flagged?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        2600,
+        300
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose"
+          },
+          "conditions": [
+            {
+              "id": "c1",
+              "leftValue": "={{ $json.duplicateFlags.length }}",
+              "rightValue": 0,
+              "operator": {
+                "type": "number",
+                "operation": "gt"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "a585fb82-6016-4484-bb3e-f035dd5ce564",
+      "name": "Build Regeneration Prompts",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2860,
+        560
+      ],
+      "parameters": {
+        "jsCode": "\nconst examConfig = $input.first().json.examConfig;\nconst blueprint = $input.first().json.blueprint;\nconst sets = $input.first().json.sets;\nconst duplicateFlags = $input.first().json.duplicateFlags;\n\nconst items = duplicateFlags.map(flag => {\n  const set = sets[flag.setIndex];\n  const q = set.questions[flag.questionIndex];\n  const bp = blueprint.distribution[flag.questionIndex];\n\n  const prompt = `Rewrite ONE exam question so it is a genuinely different\nquestion from the one below, while still matching this blueprint slot:\n\nChapter: ${bp.chapter}\nTopic: ${bp.topic}\nMarks: ${bp.marks}\nRBL: ${bp.rbl}\nCourse Outcome: ${bp.courseOutcomes.join(', ')}\n\nQuestion to replace (flagged reason: ${flag.reason}):\n\"${q.question}\"\n\nRules:\n- Do NOT reuse the wording, structure, or numeric setup of the flagged question.\n- Ask about a different angle or sub-concept within the same topic.\n- Do NOT include answers or solutions.\n\nReturn ONLY a JSON object (no prose, no markdown fences) with exactly this\nshape:\n{ \"question\": \"string\" }`;\n\n  return {\n    json: {\n      examConfig, blueprint, sets, flag, prompt\n    }\n  };\n});\n\nreturn items;\n"
+      }
+    },
+    {
+      "id": "58787225-5baa-43c7-a446-775afcb3dabe",
+      "name": "AI Regenerate Question",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        3120,
+        560
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash:generateContent",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "content-type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "options": {},
+        "jsonBody": "={{ JSON.stringify({ contents: [ { role: 'user', parts: [ { text: $json.prompt } ] } ], generationConfig: { temperature: 0.7, maxOutputTokens: 800, responseMimeType: 'application/json' } }) }}"
+      },
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "PLACEHOLDER_CREDENTIAL_ID",
+          "name": "Gemini API Key"
+        }
+      },
+      "notes": "Configure an httpHeaderAuth credential named 'Gemini API Key' with header name 'x-goog-api-key' and your Gemini API key as the value (or point it at an environment variable). No API key is hardcoded here. Model: gemini-3.5-flash."
+    },
+    {
+      "id": "147fb0b3-a355-42ff-9821-61f3af5254e0",
+      "name": "Apply Regenerated Question",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3380,
+        560
+      ],
+      "parameters": {
+        "jsCode": "\n// IMPORTANT: this node runs in \"Run Once for Each Item\" mode. Each input\n// item here is one AI response for one flagged question. Its own json IS\n// the AI response (n8n replaces json with the HTTP Request node's output),\n// so the original prompt-builder fields (flag, sets, blueprint, examConfig)\n// are fetched back via the paired-item reference to \"Build Regeneration\n// Prompts\", which only resolves correctly in per-item execution mode.\n\nconst aiResponse = $input.item.json;\nconst originalItem = $('Build Regeneration Prompts').item.json;\n\nfunction extractText(resp) {\n  // Gemini generateContent response format\n  if (resp && Array.isArray(resp.candidates) && resp.candidates.length > 0) {\n    const candidate = resp.candidates[0];\n    const parts = candidate && candidate.content && candidate.content.parts;\n    if (Array.isArray(parts)) {\n      const textPart = parts.find(p => typeof p.text === 'string');\n      if (textPart) return textPart.text;\n    }\n  }\n  // Legacy content-array response format (kept for backward compatibility)\n  if (resp && Array.isArray(resp.content)) {\n    const textBlock = resp.content.find(b => b.type === 'text');\n    if (textBlock) return textBlock.text;\n  }\n  if (typeof resp === 'string') return resp;\n  return JSON.stringify(resp);\n}\nfunction safeParseObject(text) {\n  const cleaned = text.replace(/```json|```/g, '').trim();\n  try {\n    const parsed = JSON.parse(cleaned);\n    return (parsed && typeof parsed === 'object') ? parsed : null;\n  } catch (e) {\n    return null;\n  }\n}\n\nconst raw = extractText(aiResponse);\nconst parsed = safeParseObject(raw);\n\nconst sets = JSON.parse(JSON.stringify(originalItem.sets)); // deep clone\nconst flag = originalItem.flag;\n\nif (parsed && parsed.question) {\n  sets[flag.setIndex].questions[flag.questionIndex].question = parsed.question;\n}\n\nreturn {\n  json: {\n    examConfig: originalItem.examConfig,\n    blueprint: originalItem.blueprint,\n    sets,\n    appliedFlag: flag\n  }\n};\n",
+        "mode": "runOnceForEachItem"
+      }
+    },
+    {
+      "id": "371139ae-f7d3-4423-80f3-d11b8a803b45",
+      "name": "Merge Regenerated Sets",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3640,
+        560
+      ],
+      "parameters": {
+        "jsCode": "\n// Collapse the (possibly many) regenerated-question items back into a\n// single sets array by applying each item's single question replacement\n// on top of the same base sets structure.\nconst items = $input.all();\nif (items.length === 0) {\n  return [{ json: { examConfig: {}, blueprint: {}, sets: [] } }];\n}\n\nconst base = JSON.parse(JSON.stringify(items[0].json.sets));\nconst examConfig = items[0].json.examConfig;\nconst blueprint = items[0].json.blueprint;\n\nitems.forEach(it => {\n  const flag = it.json.appliedFlag;\n  const replacedQuestion = it.json.sets[flag.setIndex].questions[flag.questionIndex].question;\n  base[flag.setIndex].questions[flag.questionIndex].question = replacedQuestion;\n});\n\nreturn [{ json: { examConfig, blueprint, sets: base } }];\n"
+      }
+    },
+    {
+      "id": "f0fbbc27-b0d4-40ae-99b4-5fde23efb580",
+      "name": "Final Validation",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3900,
+        300
+      ],
+      "parameters": {
+        "jsCode": "\nconst examConfig = $input.first().json.examConfig;\nconst blueprint = $input.first().json.blueprint;\nconst sets = $input.first().json.sets;\n\nconst errors = [];\n\nsets.forEach(set => {\n  if (set.questions.length !== blueprint.totalQuestions) {\n    errors.push(`${set.setName} has ${set.questions.length} questions, expected ${blueprint.totalQuestions}`);\n  }\n  const marksSum = set.questions.reduce((s, q) => s + (Number(q.marks) || 0), 0);\n  if (marksSum !== blueprint.maximumMarks) {\n    errors.push(`${set.setName} total marks (${marksSum}) does not equal Maximum Marks (${blueprint.maximumMarks})`);\n  }\n});\n\nconst valid = errors.length === 0;\n\nreturn [{\n  json: {\n    success: valid,\n    exam: {\n      class: examConfig.class,\n      section: examConfig.section,\n      subject: examConfig.subject,\n      examType: examConfig.examType,\n      maximumMarks: examConfig.maximumMarks,\n      time: examConfig.time,\n      totalQuestions: examConfig.totalQuestions,\n      questionsToAnswer: examConfig.questionsToAnswer,\n      marksPerQuestion: examConfig.marksPerQuestion,\n      numberOfSets: examConfig.numberOfSets,\n      academicYear: examConfig.academicYear\n    },\n    blueprint,\n    sets,\n    error: valid ? undefined : { code: 'FINAL_VALIDATION_FAILED', message: errors.join('; ') }\n  }\n}];\n"
+      }
+    },
+    {
+      "id": "6ff241a6-beae-4cad-a2aa-e181f0c6a51d",
+      "name": "Return Structured JSON",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        4160,
+        300
+      ],
+      "parameters": {
+        "jsCode": "\nconst j = $input.first().json;\n// This is the last node - its output becomes the Execute Workflow result\n// returned to 01_EXAM_CONTROLLER.\nreturn [{ json: j }];\n"
+      }
+    },
+    {
+      "id": "90f0d8f8-e964-4345-9d12-855b67732252",
+      "name": "Note_91cc75a1",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        0,
+        -320
+      ],
+      "parameters": {
+        "content": "02_AI_QUESTION_PAPER_ENGINE\n\nThe AI brain. Triggered via Execute Workflow from 01_EXAM_CONTROLLER with { examConfig }. Builds a blueprint, generates Set A (and Set B when numberOfSets = 2), checks for duplicate/similar questions between and within sets, regenerates flagged questions once, then returns the final structured question-paper JSON.\n\nSETUP: configure the AI provider credential on the 3 'AI ...' HTTP Request nodes (Set A / Set B / Regenerate). No key is hardcoded.",
+        "height": 280,
+        "width": 520,
+        "color": 5
+      }
+    }
+  ],
+  "connections": {
+    "Input": {
+      "main": [
+        [
+          {
+            "node": "Create Exam Blueprint",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Create Exam Blueprint": {
+      "main": [
+        [
+          {
+            "node": "Build Prompt - Set A",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Prompt - Set A": {
+      "main": [
+        [
+          {
+            "node": "AI Generate - Set A",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "AI Generate - Set A": {
+      "main": [
+        [
+          {
+            "node": "Parse & Validate - Set A",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse & Validate - Set A": {
+      "main": [
+        [
+          {
+            "node": "Two Sets Requested?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Two Sets Requested?": {
+      "main": [
+        [
+          {
+            "node": "Build Prompt - Set B",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Wrap Single Set",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Prompt - Set B": {
+      "main": [
+        [
+          {
+            "node": "AI Generate - Set B",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "AI Generate - Set B": {
+      "main": [
+        [
+          {
+            "node": "Parse & Validate - Set B",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse & Validate - Set B": {
+      "main": [
+        [
+          {
+            "node": "Compare Sets",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Wrap Single Set": {
+      "main": [
+        [
+          {
+            "node": "Compare Sets",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Compare Sets": {
+      "main": [
+        [
+          {
+            "node": "Any Duplicates Flagged?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Any Duplicates Flagged?": {
+      "main": [
+        [
+          {
+            "node": "Build Regeneration Prompts",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Final Validation",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Regeneration Prompts": {
+      "main": [
+        [
+          {
+            "node": "AI Regenerate Question",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "AI Regenerate Question": {
+      "main": [
+        [
+          {
+            "node": "Apply Regenerated Question",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Apply Regenerated Question": {
+      "main": [
+        [
+          {
+            "node": "Merge Regenerated Sets",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Merge Regenerated Sets": {
+      "main": [
+        [
+          {
+            "node": "Final Validation",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Final Validation": {
+      "main": [
+        [
+          {
+            "node": "Return Structured JSON",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "pinData": {},
+  "versionId": "21aa4cc9-eb13-49b4-accb-c0b52b94e6f7",
+  "meta": {
+    "instanceId": "7d1212e7-d378-461f-b4df-d0f7e90efc26"
+  }
+}

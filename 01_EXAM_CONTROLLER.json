@@ -1,0 +1,818 @@
+{
+  "name": "01_EXAM_CONTROLLER",
+  "nodes": [
+    {
+      "id": "cfd7730d-0001-4b01-b393-7c974689be85",
+      "name": "Teacher Input",
+      "type": "n8n-nodes-base.formTrigger",
+      "typeVersion": 2.2,
+      "position": [
+        0,
+        300
+      ],
+      "parameters": {
+        "formTitle": "AI Question Paper Generator",
+        "formDescription": "Enter the exam details to generate a structured question paper.",
+        "formFields": {
+          "values": [
+            {
+              "fieldLabel": "Class",
+              "fieldName": "class",
+              "fieldType": "text",
+              "requiredField": true
+            },
+            {
+              "fieldLabel": "Section",
+              "fieldName": "section",
+              "fieldType": "text",
+              "requiredField": true
+            },
+            {
+              "fieldLabel": "Subject",
+              "fieldName": "subject",
+              "fieldType": "text",
+              "requiredField": true
+            },
+            {
+              "fieldLabel": "Exam Type",
+              "fieldName": "examType",
+              "fieldType": "text",
+              "requiredField": true
+            },
+            {
+              "fieldLabel": "Maximum Marks",
+              "fieldName": "maximumMarks",
+              "fieldType": "number",
+              "requiredField": true
+            },
+            {
+              "fieldLabel": "Exam Time",
+              "fieldName": "time",
+              "fieldType": "number",
+              "requiredField": true
+            },
+            {
+              "fieldLabel": "Total Questions",
+              "fieldName": "totalQuestions",
+              "fieldType": "number",
+              "requiredField": true
+            },
+            {
+              "fieldLabel": "Questions to Answer",
+              "fieldName": "questionsToAnswer",
+              "fieldType": "number",
+              "requiredField": true
+            },
+            {
+              "fieldLabel": "Marks per Question",
+              "fieldName": "marksPerQuestion",
+              "fieldType": "number",
+              "requiredField": true
+            },
+            {
+              "fieldLabel": "Number of Sets",
+              "fieldName": "numberOfSets",
+              "fieldType": "dropdown",
+              "requiredField": true,
+              "fieldOptions": {
+                "values": [
+                  {
+                    "option": "1"
+                  },
+                  {
+                    "option": "2"
+                  }
+                ]
+              }
+            },
+            {
+              "fieldLabel": "Academic Year",
+              "fieldName": "academicYear",
+              "fieldType": "text",
+              "requiredField": true,
+              "defaultValue": "2026-27"
+            }
+          ]
+        },
+        "responseMode": "responseNode",
+        "path": "exam-controller",
+        "options": {
+          "buttonLabel": "Generate Question Paper"
+        }
+      },
+      "webhookId": "6d5f8c9e-9c3c-4e00-b33c-39a436cf2662"
+    },
+    {
+      "id": "fa96e7d7-1b5f-44cf-a7b8-97a61050e99f",
+      "name": "Normalize Input",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        0,
+        300
+      ],
+      "parameters": {
+        "jsCode": "\n// Normalize raw teacher input into a consistent shape.\n// Does NOT change the meaning of any value - only trims/casts types.\n// Source may be a classic webhook body (nested under .body) or an n8n Form\n// Trigger submission (fields directly on json, keyed by fieldName - or, on\n// older n8n versions where fieldName isn't honored, keyed by the fieldLabel\n// text). pick() checks both possible keys so this stays compatible either way.\nconst body = $input.first().json.body || $input.first().json;\n\nfunction pick(technicalName, labelName) {\n  if (body[technicalName] !== undefined) return body[technicalName];\n  if (labelName !== undefined && body[labelName] !== undefined) return body[labelName];\n  return undefined;\n}\n\nfunction toInt(v) {\n  if (v === undefined || v === null || v === '') return null;\n  const n = Number(v);\n  return Number.isFinite(n) ? Math.trunc(n) : null;\n}\nfunction toStr(v) {\n  return (v === undefined || v === null) ? '' : String(v).trim();\n}\n\nconst normalized = {\n  class: toStr(pick('class', 'Class')),\n  section: toStr(pick('section', 'Section')),\n  subject: toStr(pick('subject', 'Subject')),\n  examType: toStr(pick('examType', 'Exam Type')),\n  maximumMarks: toInt(pick('maximumMarks', 'Maximum Marks')),\n  time: toStr(pick('time', 'Exam Time')),\n  totalQuestions: toInt(pick('totalQuestions', 'Total Questions')),\n  questionsToAnswer: toInt(pick('questionsToAnswer', 'Questions to Answer')),\n  marksPerQuestion: toInt(pick('marksPerQuestion', 'Marks per Question')),\n  numberOfSets: toInt(pick('numberOfSets', 'Number of Sets')),\n  academicYear: toStr(pick('academicYear', 'Academic Year')) || '2026-27'\n};\n\nreturn [{ json: { input: normalized } }];\n"
+      }
+    },
+    {
+      "id": "b4c5dd31-6b49-4c79-af15-874559362f47",
+      "name": "Validate Input",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        260,
+        300
+      ],
+      "parameters": {
+        "jsCode": "\nconst input = $input.first().json.input;\nconst errors = [];\n\nfunction required(field, label) {\n  const v = input[field];\n  if (v === null || v === undefined || v === '') {\n    errors.push(`${label} is required`);\n  }\n}\n\nrequired('class', 'Class');\nrequired('section', 'Section');\nrequired('subject', 'Subject');\nrequired('examType', 'Exam Type');\nrequired('time', 'Time');\n\nif (input.maximumMarks === null) errors.push('Maximum Marks is required');\nif (input.totalQuestions === null) errors.push('Total Questions is required');\nif (input.questionsToAnswer === null) errors.push('Questions to Answer is required');\nif (input.marksPerQuestion === null) errors.push('Marks per Question is required');\nif (input.numberOfSets === null) errors.push('Number of Sets is required');\n\nreturn [{\n  json: {\n    input,\n    validation: {\n      stage: 'required_fields',\n      valid: errors.length === 0,\n      errors\n    }\n  }\n}];\n"
+      }
+    },
+    {
+      "id": "295a74e7-e016-4b91-b276-8ffd929d1ba0",
+      "name": "Required Fields OK?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        520,
+        300
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose"
+          },
+          "conditions": [
+            {
+              "id": "c1",
+              "leftValue": "={{ $json.validation.valid }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "662df02f-b3bc-466f-bb83-15e50dd7337a",
+      "name": "Validate Marks",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        780,
+        300
+      ],
+      "parameters": {
+        "jsCode": "\nconst input = $input.first().json.input;\nconst errors = [];\n\nif (!(Number.isInteger(input.maximumMarks) && input.maximumMarks > 0)) {\n  errors.push('Maximum Marks must be a number greater than zero');\n}\nif (!(Number.isInteger(input.totalQuestions) && input.totalQuestions > 0)) {\n  errors.push('Total Questions must be a positive integer');\n}\nif (!(Number.isInteger(input.questionsToAnswer) && input.questionsToAnswer > 0)) {\n  errors.push('Questions to Answer must be a positive integer');\n}\nif (Number.isInteger(input.totalQuestions) && Number.isInteger(input.questionsToAnswer)\n    && input.questionsToAnswer > input.totalQuestions) {\n  errors.push('Questions to Answer must not exceed Total Questions');\n}\nif (!(Number.isInteger(input.marksPerQuestion) && input.marksPerQuestion > 0)) {\n  errors.push('Marks per Question must be greater than zero');\n}\nif (![1, 2].includes(input.numberOfSets)) {\n  errors.push('Number of Sets must be exactly 1 or 2');\n}\n\n// Cross-field check: Questions to Answer x Marks per Question = Maximum Marks\nif (Number.isInteger(input.questionsToAnswer) && Number.isInteger(input.marksPerQuestion)\n    && Number.isInteger(input.maximumMarks)) {\n  const computed = input.questionsToAnswer * input.marksPerQuestion;\n  if (computed !== input.maximumMarks) {\n    errors.push(\n      `Questions to Answer (${input.questionsToAnswer}) x Marks per Question (${input.marksPerQuestion}) ` +\n      `= ${computed}, which does not equal Maximum Marks (${input.maximumMarks})`\n    );\n  }\n}\n\nreturn [{\n  json: {\n    input,\n    validation: {\n      stage: 'marks_rules',\n      valid: errors.length === 0,\n      errors\n    }\n  }\n}];\n"
+      }
+    },
+    {
+      "id": "161c3258-e99d-4515-a762-62b6ed8ed930",
+      "name": "Marks Rules OK?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        1040,
+        300
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose"
+          },
+          "conditions": [
+            {
+              "id": "c1",
+              "leftValue": "={{ $json.validation.valid }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "b6d5a273-ac22-421c-b31d-ed5e4f76c3eb",
+      "name": "Identify Class + Subject",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1300,
+        300
+      ],
+      "parameters": {
+        "jsCode": "\nconst input = $input.first().json.input;\n\nconst lookupKey = {\n  classKey: String(input.class).trim(),\n  subjectKey: String(input.subject).trim().toLowerCase(),\n  academicYear: input.academicYear\n};\n\nreturn [{ json: { input, lookupKey } }];\n"
+      }
+    },
+    {
+      "id": "88be5b95-12c4-40f4-890f-2ed9f0f89b5a",
+      "name": "Retrieve Curriculum",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1560,
+        300
+      ],
+      "parameters": {
+        "jsCode": "\n// -----------------------------------------------------------------\n// CURRICULUM SOURCE (DEMO)\n// -----------------------------------------------------------------\n// This node is intentionally isolated so it can later be replaced\n// with a real data source (Google Sheets, database, or school API)\n// WITHOUT touching any other node in this workflow.\n//\n// Contract this node must always fulfil:\n//   INPUT:  { class, subject, academicYear }\n//   OUTPUT: { curriculum: { class, subject, academicYear, chapters: [...] } }\n//\n// To swap the source later:\n//   - Replace the body of this Code node with an HTTP Request / Google\n//     Sheets / Database node that returns the same \"curriculum\" shape.\n// -----------------------------------------------------------------\n\nconst input = $input.first().json.input;\nconst lookupKey = $input.first().json.lookupKey;\n\nconst CURRICULUM_DB = {\n  '8|mathematics|2026-27': {\n    class: '8',\n    subject: 'Mathematics',\n    academicYear: '2026-27',\n    chapters: [\n      {\n        chapter: 'Rational Numbers',\n        topics: [\n          'Properties of rational numbers',\n          'Operations on rational numbers'\n        ]\n      },\n      {\n        chapter: 'Linear Equations',\n        topics: [\n          'Solving linear equations',\n          'Applications of linear equations'\n        ]\n      }\n    ]\n  }\n};\n\nconst key = `${lookupKey.classKey}|${lookupKey.subjectKey}|${lookupKey.academicYear}`;\nconst curriculum = CURRICULUM_DB[key];\n\nif (!curriculum) {\n  return [{\n    json: {\n      input,\n      curriculumError: `No curriculum found for Class ${input.class}, ` +\n        `Subject ${input.subject}, Academic Year ${input.academicYear}`\n    }\n  }];\n}\n\nreturn [{ json: { input, curriculum } }];\n"
+      }
+    },
+    {
+      "id": "a7d11695-f4f2-4344-a682-3bef32837185",
+      "name": "Curriculum Found?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        1820,
+        300
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose"
+          },
+          "conditions": [
+            {
+              "id": "c1",
+              "leftValue": "={{ $json.curriculum !== undefined }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "20f5375b-45e9-4439-82e1-dbac424f5e2e",
+      "name": "Prepare Exam Configuration",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2080,
+        300
+      ],
+      "parameters": {
+        "jsCode": "\nconst input = $input.first().json.input;\nconst curriculum = $input.first().json.curriculum;\n\nconst examConfig = {\n  class: input.class,\n  section: input.section,\n  subject: input.subject,\n  examType: input.examType,\n  maximumMarks: input.maximumMarks,\n  time: input.time,\n  totalQuestions: input.totalQuestions,\n  questionsToAnswer: input.questionsToAnswer,\n  marksPerQuestion: input.marksPerQuestion,\n  numberOfSets: input.numberOfSets,\n  academicYear: input.academicYear,\n  curriculum\n};\n\nreturn [{ json: { examConfig } }];\n"
+      }
+    },
+    {
+      "id": "75d25e26-c4f1-4297-9a36-483def16bf9b",
+      "name": "Execute Workflow 2",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.2,
+      "position": [
+        2340,
+        300
+      ],
+      "parameters": {
+        "source": "database",
+        "workflowId": {
+          "__rl": true,
+          "value": "={{ $env.QUESTION_PAPER_ENGINE_WORKFLOW_ID }}",
+          "mode": "id"
+        },
+        "workflowInputs": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "examConfig": "={{ $json.examConfig }}"
+          }
+        },
+        "options": {
+          "waitForSubResult": true
+        }
+      },
+      "notes": "Set the QUESTION_PAPER_ENGINE_WORKFLOW_ID environment variable, or replace with the actual workflow ID/name of 02_AI_QUESTION_PAPER_ENGINE after import."
+    },
+    {
+      "id": "7498f7b9-eb34-453f-9f21-d7e7727ce914",
+      "name": "Validate Workflow 2 Result",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2600,
+        300
+      ],
+      "parameters": {
+        "jsCode": "\nconst result = $input.first().json;\nconst ok = result && result.success === true\n  && Array.isArray(result.sets) && result.sets.length > 0;\n\nreturn [{\n  json: {\n    questionPaperData: result,\n    wf2Validation: {\n      valid: ok,\n      errors: ok ? [] : ['Workflow 2 did not return a valid structured question-paper result']\n    }\n  }\n}];\n"
+      }
+    },
+    {
+      "id": "103a0b9f-eed2-47b0-bd73-861b0d33b89d",
+      "name": "WF2 Result Valid?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        2860,
+        300
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose"
+          },
+          "conditions": [
+            {
+              "id": "c1",
+              "leftValue": "={{ $json.wf2Validation.valid }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "144453c9-6ef1-4f69-85b6-ae4bcc120371",
+      "name": "Prepare Document Input",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3120,
+        300
+      ],
+      "parameters": {
+        "jsCode": "\nconst questionPaperData = $input.first().json.questionPaperData;\n\n// Workflow 3 receives exactly the validated question-paper JSON produced by\n// Workflow 2 - Workflow 1 does not alter academic content, only forwards it.\nreturn [{ json: { documentInput: questionPaperData } }];\n"
+      }
+    },
+    {
+      "id": "74211a8a-aae2-44c8-907f-4d06cd2b3a27",
+      "name": "Execute Workflow 3",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.2,
+      "position": [
+        3380,
+        300
+      ],
+      "parameters": {
+        "source": "database",
+        "workflowId": {
+          "__rl": true,
+          "value": "={{ $env.DOCUMENT_GENERATOR_WORKFLOW_ID }}",
+          "mode": "id"
+        },
+        "workflowInputs": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "questionPaperData": "={{ $json.documentInput }}"
+          }
+        },
+        "options": {
+          "waitForSubResult": true
+        }
+      },
+      "notes": "Set the DOCUMENT_GENERATOR_WORKFLOW_ID environment variable, or replace with the actual workflow ID/name of 03_DOCUMENT_GENERATOR after import."
+    },
+    {
+      "id": "d314c3cf-1a1c-4051-b9e6-5ffd0bee99b6",
+      "name": "Validate Workflow 3 Result",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3640,
+        300
+      ],
+      "parameters": {
+        "jsCode": "\nconst result = $input.first().json;\nconst ok = result && result.success === true\n  && Array.isArray(result.documents) && result.documents.length > 0;\n\nreturn [{\n  json: {\n    documentResult: result,\n    wf3Validation: {\n      valid: ok,\n      errors: ok ? [] : ['Workflow 3 did not return valid document information']\n    }\n  }\n}];\n"
+      }
+    },
+    {
+      "id": "ffdd2344-14fa-40bd-9986-fcfba1649dcf",
+      "name": "WF3 Result Valid?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        3900,
+        300
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose"
+          },
+          "conditions": [
+            {
+              "id": "c1",
+              "leftValue": "={{ $json.wf3Validation.valid }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "94822360-9943-42eb-bd4e-a5d231ba57d5",
+      "name": "Build Final Success Response",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        4160,
+        80
+      ],
+      "parameters": {
+        "jsCode": "\nconst documentResult = $json.documentResult;\n\nreturn [{\n  json: {\n    success: true,\n    exam: documentResult.exam,\n    documents: documentResult.documents\n  }\n}];\n"
+      }
+    },
+    {
+      "id": "99661c9c-ae76-4fdb-8437-b0e7e5f51ef5",
+      "name": "Prepare Form Completion",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        4420,
+        80
+      ],
+      "parameters": {
+        "jsCode": "\n// Builds the completion-page content for the Form Ending node from the\n// validated success payload (Build Final Success Response) plus the exam\n// details already captured earlier in this same execution. This node only\n// formats display text/links - it does not touch question-paper/document\n// generation logic, which lives entirely in Workflow 02 and Workflow 03.\nconst successPayload = $input.first().json; // { success, exam, documents }\nconst examConfig = $('Prepare Exam Configuration').first().json.examConfig;\n\nconst documents = Array.isArray(successPayload.documents) ? successPayload.documents : [];\n\n// Workflow 3 (03_DOCUMENT_GENERATOR) is unchanged by this update, so the\n// exact shape of each \"documents\" entry isn't assumed here - the filename\n// and set label are read from whichever of these common keys is present.\n// A local filesystem path (e.g. /data/question-papers/Question_Paper_Set_A.pdf)\n// is reduced to just its filename, since only the filename is passed to the\n// PDF_DOWNLOAD workflow's download endpoint.\nfunction extractFilename(doc) {\n  const raw = (doc && (doc.filename || doc.fileName || doc.file || doc.path || doc.filePath)) || '';\n  const segments = String(raw).split(/[\\\\/]/);\n  return segments[segments.length - 1] || '';\n}\nfunction extractSetLabel(doc, index) {\n  const raw = doc && (doc.setName || doc.set || doc.name || doc.label);\n  if (raw) return String(raw);\n  return index === 0 ? 'Set A' : 'Set B';\n}\nfunction escapeHtml(str) {\n  return String(str)\n    .replace(/&/g, '&amp;')\n    .replace(/</g, '&lt;')\n    .replace(/>/g, '&gt;')\n    .replace(/\"/g, '&quot;');\n}\n\n// N8N_PUBLIC_URL must be set as an n8n environment variable pointing at this\n// instance's public base URL (e.g. https://your-instance.app.n8n.cloud).\n// The placeholder below is only used if that variable hasn't been configured.\nconst N8N_PUBLIC_URL = $env.N8N_PUBLIC_URL || 'https://YOUR_N8N_PUBLIC_URL';\n\nconst links = documents.map((doc, index) => {\n  const filename = extractFilename(doc);\n  const setLabel = extractSetLabel(doc, index);\n  const url = `${N8N_PUBLIC_URL}/webhook/question-paper-download?file=${encodeURIComponent(filename)}`;\n  return { setLabel, filename, url };\n});\n\nconst linksHtml = links\n  .map(l => `<p><a href=\"${escapeHtml(l.url)}\" target=\"_blank\" rel=\"noopener noreferrer\">Download ${escapeHtml(l.setLabel)} PDF</a></p>`)\n  .join('\\n');\n\nconst completionMessage =\n  `<p><strong>Class:</strong> ${escapeHtml(examConfig.class)} &nbsp;&nbsp; ` +\n  `<strong>Subject:</strong> ${escapeHtml(examConfig.subject)} &nbsp;&nbsp; ` +\n  `<strong>Exam Type:</strong> ${escapeHtml(examConfig.examType)}</p>` +\n  `<p><strong>Sets generated:</strong> ${escapeHtml(examConfig.numberOfSets)}</p>` +\n  linksHtml;\n\nreturn [{\n  json: {\n    completionTitle: 'Question Paper Generated Successfully',\n    completionMessage\n  }\n}];\n"
+      }
+    },
+    {
+      "id": "395aed4f-8b2c-404e-8bf8-838417576c4d",
+      "name": "Form Ending",
+      "type": "n8n-nodes-base.form",
+      "typeVersion": 1,
+      "position": [
+        4680,
+        80
+      ],
+      "parameters": {
+        "operation": "completion",
+        "completionTitle": "={{ $json.completionTitle }}",
+        "completionMessage": "={{ $json.completionMessage }}",
+        "options": {}
+      },
+      "webhookId": "4a115ec1-3714-4667-aa8d-6a1851d24b29"
+    },
+    {
+      "id": "5c902177-9e96-40d7-a785-377efb7bc8f5",
+      "name": "Format Error Response",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1040,
+        800
+      ],
+      "parameters": {
+        "jsCode": "\n// Collects errors from whichever validation stage failed and returns\n// a single consistent error envelope.\nconst j = $input.first().json;\n\nlet code = 'UNKNOWN_ERROR';\nlet errors = [];\n\nif (j.validation && j.validation.stage === 'required_fields') {\n  code = 'INVALID_INPUT';\n  errors = j.validation.errors;\n} else if (j.validation && j.validation.stage === 'marks_rules') {\n  code = 'INVALID_MARKS_CONFIGURATION';\n  errors = j.validation.errors;\n} else if (j.curriculumError) {\n  code = 'CURRICULUM_NOT_FOUND';\n  errors = [j.curriculumError];\n} else if (j.wf2Validation) {\n  code = 'QUESTION_ENGINE_FAILED';\n  errors = j.wf2Validation.errors;\n} else if (j.wf3Validation) {\n  code = 'DOCUMENT_GENERATION_FAILED';\n  errors = j.wf3Validation.errors;\n} else {\n  errors = ['An unexpected error occurred in 01_EXAM_CONTROLLER'];\n}\n\nreturn [{\n  json: {\n    success: false,\n    error: {\n      code,\n      message: errors.join('; ')\n    }\n  }\n}];\n"
+      }
+    },
+    {
+      "id": "7d29435b-5daa-4447-afaf-304179fa2173",
+      "name": "Prepare Form Error Message",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1300,
+        800
+      ],
+      "parameters": {
+        "jsCode": "\n// Turns the existing curated error envelope from Format Error Response into\n// readable Form Ending content. Format Error Response already strips this\n// down to a { code, message } pair with no internal paths, credentials, or\n// stack traces - this node only wraps that message for display and does not\n// change what is exposed.\nconst err = $input.first().json; // { success: false, error: { code, message } }\nconst message = (err && err.error && err.error.message)\n  ? err.error.message\n  : 'An unexpected error occurred.';\n\nfunction escapeHtml(str) {\n  return String(str)\n    .replace(/&/g, '&amp;')\n    .replace(/</g, '&lt;')\n    .replace(/>/g, '&gt;')\n    .replace(/\"/g, '&quot;');\n}\n\nreturn [{\n  json: {\n    completionTitle: 'Question Paper Could Not Be Generated',\n    completionMessage: `<p>Question paper could not be generated.</p><p>${escapeHtml(message)}</p>`\n  }\n}];\n"
+      }
+    },
+    {
+      "id": "97db7b47-62a4-4f31-b333-7b2869d55e44",
+      "name": "Form Ending (Error)",
+      "type": "n8n-nodes-base.form",
+      "typeVersion": 1,
+      "position": [
+        1560,
+        800
+      ],
+      "parameters": {
+        "operation": "completion",
+        "completionTitle": "={{ $json.completionTitle }}",
+        "completionMessage": "={{ $json.completionMessage }}",
+        "options": {}
+      },
+      "webhookId": "351fd560-b2a5-4e5f-a9fd-b3312fb7ce66"
+    },
+    {
+      "id": "d6b849c5-5c5b-418d-ac63-2956196fca3d",
+      "name": "Note_cae6f400",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        0,
+        -180
+      ],
+      "parameters": {
+        "content": "01_EXAM_CONTROLLER\n\nEntry point of the system. Receives teacher input via an n8n Form Trigger (\"AI Question Paper Generator\" form), validates it, resolves the curriculum, then calls 02_AI_QUESTION_PAPER_ENGINE and 03_DOCUMENT_GENERATOR in sequence via Execute Workflow nodes. On success, the teacher sees a Form Ending completion page with links to download the generated PDF(s) via the separate PDF_DOWNLOAD workflow; on failure, a Form Ending (Error) page shows a readable error message.\n\nSETUP: after importing all workflows, open the two 'Execute Workflow' nodes below and point them at the actual imported IDs of 02_AI_QUESTION_PAPER_ENGINE and 03_DOCUMENT_GENERATOR (or set the QUESTION_PAPER_ENGINE_WORKFLOW_ID / DOCUMENT_GENERATOR_WORKFLOW_ID environment variables). Also set the N8N_PUBLIC_URL environment variable to this n8n instance's public base URL so the generated PDF download links resolve correctly, and import PDF_DOWNLOAD so those links work.",
+        "height": 280,
+        "width": 480,
+        "color": 5
+      }
+    }
+  ],
+  "connections": {
+    "Teacher Input": {
+      "main": [
+        [
+          {
+            "node": "Normalize Input",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Normalize Input": {
+      "main": [
+        [
+          {
+            "node": "Validate Input",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validate Input": {
+      "main": [
+        [
+          {
+            "node": "Required Fields OK?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Required Fields OK?": {
+      "main": [
+        [
+          {
+            "node": "Validate Marks",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Format Error Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validate Marks": {
+      "main": [
+        [
+          {
+            "node": "Marks Rules OK?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Marks Rules OK?": {
+      "main": [
+        [
+          {
+            "node": "Identify Class + Subject",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Format Error Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Identify Class + Subject": {
+      "main": [
+        [
+          {
+            "node": "Retrieve Curriculum",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Retrieve Curriculum": {
+      "main": [
+        [
+          {
+            "node": "Curriculum Found?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Curriculum Found?": {
+      "main": [
+        [
+          {
+            "node": "Prepare Exam Configuration",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Format Error Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare Exam Configuration": {
+      "main": [
+        [
+          {
+            "node": "Execute Workflow 2",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Execute Workflow 2": {
+      "main": [
+        [
+          {
+            "node": "Validate Workflow 2 Result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validate Workflow 2 Result": {
+      "main": [
+        [
+          {
+            "node": "WF2 Result Valid?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "WF2 Result Valid?": {
+      "main": [
+        [
+          {
+            "node": "Prepare Document Input",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Format Error Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare Document Input": {
+      "main": [
+        [
+          {
+            "node": "Execute Workflow 3",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Execute Workflow 3": {
+      "main": [
+        [
+          {
+            "node": "Validate Workflow 3 Result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validate Workflow 3 Result": {
+      "main": [
+        [
+          {
+            "node": "WF3 Result Valid?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "WF3 Result Valid?": {
+      "main": [
+        [
+          {
+            "node": "Build Final Success Response",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Format Error Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Final Success Response": {
+      "main": [
+        [
+          {
+            "node": "Prepare Form Completion",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Format Error Response": {
+      "main": [
+        [
+          {
+            "node": "Prepare Form Error Message",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare Form Completion": {
+      "main": [
+        [
+          {
+            "node": "Form Ending",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare Form Error Message": {
+      "main": [
+        [
+          {
+            "node": "Form Ending (Error)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "pinData": {},
+  "versionId": "1989ca1c-490b-42c4-94d9-a7863408acca",
+  "meta": {
+    "instanceId": "e0b67d1f-7294-48be-8838-a99ec6f0899c"
+  }
+}
